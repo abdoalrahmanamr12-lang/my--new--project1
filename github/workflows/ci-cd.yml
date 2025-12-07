@@ -1,0 +1,87 @@
+name: CI / CD
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+      - name: Install backend dependencies
+        run: npm ci
+        working-directory: backend
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+      - name: Build frontend
+        run: npm run build
+        working-directory: frontend
+      - name: Upload frontend build
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build
+          path: frontend/build
+
+  deploy-frontend:
+    name: Deploy frontend to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+      pages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-build
+          path: build
+      - name: Configure Pages
+        uses: actions/configure-pages@v3
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v1
+        with:
+          path: build/frontend/build
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v1
+
+  deploy-backend-heroku:
+    name: Deploy backend to Heroku (optional)
+    needs: build
+    runs-on: ubuntu-latest
+    if: ${{ secrets.HEROKU_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Heroku CLI
+        run: curl https://cli-assets.heroku.com/install.sh | sh
+      - name: Login to Heroku
+        env:
+          HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
+        run: echo "$HEROKU_API_KEY" | heroku auth:token
+      - name: Deploy to Heroku (git push)
+        env:
+          HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
+        run: |
+          git remote add heroku https://git.heroku.com/${{ secrets.HEROKU_APP_NAME }}.git || true
+          git push heroku main:refs/heads/main --force
+
+  notify:
+    name: Notify on success
+    needs: [deploy-frontend]
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    steps:
+      - name: Success message
+        run: echo "Deployment completed for $GITHUB_REPOSITORY at $GITHUB_REF"
